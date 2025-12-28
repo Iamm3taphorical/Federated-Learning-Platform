@@ -1,0 +1,82 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: federated_postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: federated_medical
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  server:
+    build:
+      context: .
+      dockerfile: deployment/Dockerfile.server
+    container_name: federated_server
+    environment:
+      - DATABASE_URL=postgresql://postgres:password@postgres:5432/federated_medical
+      - DATABASE_ASYNC_URL=postgresql+asyncpg://postgres:password@postgres:5432/federated_medical
+      - FL_SERVER_ADDRESS=0.0.0.0:8080
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=8000
+      - ENABLE_DP=true
+      - TARGET_EPSILON=8.0
+      - TARGET_DELTA=1e-5
+      - NOISE_MULTIPLIER=1.1
+    ports:
+      - "8000:8000"   # API
+      - "8080:8080"   # FL Server
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./weights:/app/weights
+      - ./logs:/app/logs
+
+  client_1:
+    build:
+      context: .
+      dockerfile: deployment/Dockerfile.client
+    container_name: hospital_client_1
+    environment:
+      - FL_SERVER_ADDRESS=server:8080
+      - HOSPITAL_ID=hospital_1
+      - DATA_PATH=/data
+      - ENABLE_DP=true
+    depends_on:
+      - server
+    volumes:
+      - ./data/hospital_1:/data:ro
+
+  client_2:
+    build:
+      context: .
+      dockerfile: deployment/Dockerfile.client
+    container_name: hospital_client_2
+    environment:
+      - FL_SERVER_ADDRESS=server:8080
+      - HOSPITAL_ID=hospital_2
+      - DATA_PATH=/data
+      - ENABLE_DP=true
+    depends_on:
+      - server
+    volumes:
+      - ./data/hospital_2:/data:ro
+
+volumes:
+  postgres_data:
+
+networks:
+  default:
+    name: federated_network
